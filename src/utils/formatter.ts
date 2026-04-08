@@ -2,6 +2,8 @@
  * 消息格式化和转换工具
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import type { ClaudeMessage, ClaudeAssistantMessage, ClaudeResultMessage, SessionMessage } from '../types/index.js';
 
 /**
@@ -209,6 +211,11 @@ export function detectSpecialCommand(message: string): { type: string; args: str
     return { type: 'tasklist', args: '' };
   }
 
+  // /dirs - 查看目录列表
+  if (trimmed === '/dirs') {
+    return { type: 'dirs', args: '' };
+  }
+
   // /resume - 恢复任务
   const resumeMatch = trimmed.match(/^\/resume\s+(.+)$/);
   if (resumeMatch) {
@@ -219,6 +226,17 @@ export function detectSpecialCommand(message: string): { type: string; args: str
   const taskDeleteMatch = trimmed.match(/^\/taskdelete\s+(.+)$/);
   if (taskDeleteMatch) {
     return { type: 'taskdelete', args: taskDeleteMatch[1] };
+  }
+
+  // /skills - Skill 列表
+  if (trimmed === '/skills') {
+    return { type: 'skills', args: '' };
+  }
+
+  // /skill-copy - 复制 skill 命令
+  const skillCopyMatch = trimmed.match(/^\/skill-copy\s+(.+)$/);
+  if (skillCopyMatch) {
+    return { type: 'skill-copy', args: skillCopyMatch[1] };
   }
 
   return null;
@@ -234,11 +252,159 @@ export interface DirectoryRecord {
 }
 
 /**
+ * Skill 定义接口
+ */
+export interface Skill {
+  id: string;
+  name: string;
+  command: string;
+  description: string;
+}
+
+/**
+ * 从 SKILL.md 文件解析 name 和 description
+ * 支持两种格式：
+ * 1. YAML 前置数据（--- 包裹）
+ * 2. Markdown 标题（# Title + 描述行）
+ */
+function parseSkillMeta(content: string, dirName: string): { name: string; description: string } | null {
+  // 格式1: YAML 前置数据
+  const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (yamlMatch) {
+    const frontmatter = yamlMatch[1];
+    const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+    const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
+    if (nameMatch) {
+      return {
+        name: nameMatch[1].trim(),
+        description: descMatch ? descMatch[1].trim() : '',
+      };
+    }
+  }
+
+  // 格式2: Markdown 标题 + 描述
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  if (titleMatch) {
+    const title = titleMatch[1].trim();
+    // 尝试从描述/概述/触发词后提取描述
+    const descMatch = content.match(/(?:描述|概述|简介|Description)[：:]\s*\n?\s*(.+)$/m);
+    return {
+      name: title,
+      description: descMatch ? descMatch[1].trim() : '',
+    };
+  }
+
+  // 格式3: 使用目录名
+  return { name: dirName, description: '' };
+}
+
+/**
+ * 从目录加载 skills（读取 SKILL.md 文件）
+ */
+function loadSkillsFromDir(skillsDir: string, commandPrefix: string): Skill[] {
+  const skills: Skill[] = [];
+
+  if (!fs.existsSync(skillsDir)) return skills;
+
+  try {
+    const entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillFile = path.join(skillsDir, entry.name, 'SKILL.md');
+      if (!fs.existsSync(skillFile)) continue;
+
+      const content = fs.readFileSync(skillFile, 'utf-8');
+      const meta = parseSkillMeta(content, entry.name);
+      if (!meta) continue;
+
+      skills.push({
+        id: entry.name,
+        name: meta.name,
+        command: `${commandPrefix}${entry.name}`,
+        description: meta.description,
+      });
+    }
+  } catch {
+    // ignore read errors
+  }
+
+  return skills;
+}
+
+/**
+ * 从 .claude/commands/ 目录加载项目命令
+ */
+function loadCommandsFromDir(commandsDir: string): Skill[] {
+  const skills: Skill[] = [];
+
+  if (!fs.existsSync(commandsDir)) return skills;
+
+  try {
+    const walkDir = (dir: string, prefix: string) => {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walkDir(fullPath, `${prefix}${entry.name}:`);
+        } else if (entry.name.endsWith('.md')) {
+          const cmdName = entry.name.replace(/\.md$/, '');
+          const command = `/${prefix}${cmdName}`;
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const meta = parseSkillMeta(content, cmdName);
+          const description = meta?.description || '';
+          skills.push({
+            id: command,
+            name: `${prefix}${cmdName}`,
+            command,
+            description,
+          });
+        }
+      }
+    };
+    walkDir(commandsDir, '');
+  } catch {
+    // ignore read errors
+  }
+
+  return skills;
+}
+
+/**
+ * 动态加载所有用户 skills（全局 + 项目级别）
+ */
+export function loadAllSkills(workingDir: string): Skill[] {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  const skills: Skill[] = [];
+
+  // 全局用户 skills: ~/.claude/skills/
+  const globalSkillsDir = path.join(homeDir, '.claude', 'skills');
+  skills.push(...loadSkillsFromDir(globalSkillsDir, '/'));
+
+  // 项目级 skills: <workingDir>/.claude/skills/
+  const projectSkillsDir = path.join(workingDir, '.claude', 'skills');
+  skills.push(...loadSkillsFromDir(projectSkillsDir, '/'));
+
+  // 项目级 commands: <workingDir>/.claude/commands/
+  const projectCommandsDir = path.join(workingDir, '.claude', 'commands');
+  skills.push(...loadCommandsFromDir(projectCommandsDir));
+
+  return skills;
+}
+
+/**
+ * 在 skill 列表中查找指定 skill
+ */
+export function findSkillById(skills: Skill[], id: string): Skill | undefined {
+  return skills.find(skill => skill.id === id);
+}
+
+/**
  * 生成帮助卡片（带按钮，可点击发送命令）
  */
 export function generateHelpCard(
   currentDirectory?: string,
-  recentDirectories: DirectoryRecord[] = []
+  recentDirectories: DirectoryRecord[] = [],
+  showDirListButton?: boolean,
 ): Record<string, unknown> {
   const elements: Array<Record<string, unknown>> = [];
 
@@ -325,6 +491,17 @@ export function generateHelpCard(
           command: '/pwd',
         },
       },
+      ...(showDirListButton ? [{
+        tag: 'button',
+        text: {
+          tag: 'plain_text',
+          content: '目录列表',
+        },
+        type: 'primary',
+        value: {
+          command: '/dirs',
+        },
+      }] : []),
     ],
   });
 
@@ -440,6 +617,32 @@ export function generateHelpCard(
     ],
   });
 
+  // Skill 列表
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'div',
+    text: {
+      tag: 'lark_md',
+      content: '**🎯 Skill 列表**',
+    },
+  });
+  elements.push({
+    tag: 'action',
+    actions: [
+      {
+        tag: 'button',
+        text: {
+          tag: 'plain_text',
+          content: '查看 Skill 列表',
+        },
+        type: 'primary',
+        value: {
+          command: '/skills',
+        },
+      },
+    ],
+  });
+
   // 提示
   elements.push({ tag: 'hr' });
   elements.push({
@@ -458,6 +661,155 @@ export function generateHelpCard(
       title: {
         tag: 'plain_text',
         content: 'Claude Client 使用指南',
+      },
+      template: 'blue',
+    },
+    elements,
+  };
+}
+
+/**
+ * 生成 Skill 列表卡片
+ */
+export function generateSkillListCard(skills: Skill[]): Record<string, unknown> {
+  const elements: Array<Record<string, unknown>> = [];
+
+  elements.push({
+    tag: 'div',
+    text: {
+      tag: 'lark_md',
+      content: `共 **${skills.length}** 个可用 Skill，点击按钮复制命令。`,
+    },
+  });
+
+  elements.push({ tag: 'hr' });
+
+  // 每行最多 4 个按钮，紧凑排列
+  const buttonsPerRow = 4;
+  for (let i = 0; i < skills.length; i += buttonsPerRow) {
+    const row = skills.slice(i, i + buttonsPerRow);
+    elements.push({
+      tag: 'action',
+      actions: row.map(skill => ({
+        tag: 'button',
+        text: {
+          tag: 'plain_text',
+          content: skill.name,
+        },
+        type: 'default',
+        value: {
+          command: `/skill-copy ${skill.id}`,
+        },
+      })),
+    });
+  }
+
+  // 返回帮助按钮
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'action',
+    actions: [
+      {
+        tag: 'button',
+        text: {
+          tag: 'plain_text',
+          content: '返回帮助',
+        },
+        type: 'default',
+        value: {
+          command: '/help',
+        },
+      },
+    ],
+  });
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      title: {
+        tag: 'plain_text',
+        content: '🎯 Skill 列表',
+      },
+      template: 'blue',
+    },
+    elements,
+  };
+}
+
+/**
+ * 生成目录列表卡片
+ */
+export function generateDirectoryListCard(
+  directories: string[],
+  currentDir?: string,
+): Record<string, unknown> {
+  const elements: Array<Record<string, unknown>> = [];
+
+  if (directories.length === 0) {
+    return { elements: [] };
+  }
+
+  elements.push({
+    tag: 'div',
+    text: {
+      tag: 'lark_md',
+      content: `📋 共 **${directories.length}** 个项目目录`,
+    },
+  });
+
+  elements.push({ tag: 'hr' });
+
+  for (const dir of directories) {
+    const dirName = dir.split(/[\\/]/).pop() || dir;
+    const isCurrent = currentDir && dir === currentDir;
+
+    elements.push({
+      tag: 'action',
+      actions: [
+        {
+          tag: 'button',
+          text: {
+            tag: 'plain_text',
+            content: `${isCurrent ? '📍 ' : '📁 '}${dirName}`,
+          },
+          type: isCurrent ? 'primary' : 'default',
+          value: {
+            command: `/cd ${dir}`,
+          },
+        },
+      ],
+    });
+  }
+
+  // 返回帮助按钮
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'action',
+    actions: [
+      {
+        tag: 'button',
+        text: {
+          tag: 'plain_text',
+          content: '返回帮助',
+        },
+        type: 'default',
+        value: {
+          command: '/help',
+        },
+      },
+    ],
+  });
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      title: {
+        tag: 'plain_text',
+        content: '📁 项目目录列表',
       },
       template: 'blue',
     },

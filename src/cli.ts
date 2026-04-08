@@ -9,6 +9,7 @@ import { config as dotenvConfig } from 'dotenv';
 import { createApp } from './app.js';
 import { getConfig } from './utils/config.js';
 import { checkClaudeAvailable } from './claude/index.js';
+import { install as startupInstall, uninstall as startupUninstall, isPlatformSupported, getPlatformName } from './startup/index.js';
 
 // 加载环境变量
 dotenvConfig({ path: resolve(process.cwd(), '.env') });
@@ -29,6 +30,10 @@ async function main(): Promise<void> {
 
       case 'check':
         await checkClaude();
+        break;
+
+      case 'startup':
+        await handleStartup();
         break;
 
       case 'help':
@@ -149,6 +154,57 @@ async function checkClaude(): Promise<void> {
   }
 }
 
+async function handleStartup(): Promise<void> {
+  const action = args[1]; // install 或 uninstall
+
+  if (!action || !['install', 'uninstall'].includes(action)) {
+    console.error('用法: claude-client startup <install|uninstall> [--dir <path>]');
+    console.error('');
+    console.error('  install    安装开机自启');
+    console.error('  uninstall  卸载开机自启');
+    process.exit(1);
+  }
+
+  // 检查平台支持
+  if (!isPlatformSupported()) {
+    console.error(`❌ 当前平台 ${getPlatformName()} 不支持开机自启配置`);
+    console.error('   仅支持: Windows, macOS, Linux');
+    process.exit(1);
+  }
+
+  if (action === 'install') {
+    // 解析 --dir 参数
+    let workingDir = process.cwd();
+    const dirIndex = args.indexOf('--dir');
+    if (dirIndex !== -1 && args[dirIndex + 1]) {
+      workingDir = resolve(args[dirIndex + 1]);
+    }
+
+    console.log(`📦 正在安装开机自启 (${getPlatformName()})...`);
+    console.log(`   工作目录: ${workingDir}`);
+    console.log('');
+
+    try {
+      const result = startupInstall(workingDir);
+      console.log('✅ ' + result);
+    } catch (error) {
+      console.error('❌ ' + (error instanceof Error ? error.message : error));
+      process.exit(1);
+    }
+  } else {
+    console.log(`📦 正在卸载开机自启 (${getPlatformName()})...`);
+    console.log('');
+
+    try {
+      const result = startupUninstall();
+      console.log('✅ ' + result);
+    } catch (error) {
+      console.error('❌ ' + (error instanceof Error ? error.message : error));
+      process.exit(1);
+    }
+  }
+}
+
 function showHelp(): void {
   console.log(`
 Claude Client - 通过飞书远程控制本地 Claude Code
@@ -160,6 +216,8 @@ Claude Client - 通过飞书远程控制本地 Claude Code
                        directory - 工作目录 (默认: 当前目录)
   config               显示当前配置
   check                检查 Claude Code CLI 是否可用
+  startup install      安装开机自启 (--dir 指定工作目录)
+  startup uninstall    卸载开机自启
   help                 显示帮助信息
 
 选项:
@@ -185,6 +243,9 @@ Claude Client - 通过飞书远程控制本地 Claude Code
   claude-client start                   # 在当前目录启动
   claude-client start /path/to/project  # 在指定目录启动
   claude-client config                  # 查看配置
+  claude-client startup install         # 安装开机自启 (当前目录)
+  claude-client startup install --dir /path/to/project  # 指定工作目录
+  claude-client startup uninstall       # 卸载开机自启
 
 更多信息请访问: https://github.com/your-repo/claude-client
   `);

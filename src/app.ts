@@ -19,10 +19,15 @@ import {
   detectSpecialCommand,
   generateHelpMessage,
   generateHelpCard,
+  generateSkillListCard,
+  generateDirectoryListCard,
   generateTaskListCard,
+  loadAllSkills,
+  findSkillById,
   formatHistoryForContext,
   type TaskInfo,
 } from './utils/formatter.js';
+import { getSubDirectories } from './utils/workspace.js';
 import type { FeishuMessageContext, ClaudePermissionMode, Session, ClaudeMessage, ClaudeAssistantMessage } from './types/index.js';
 
 export interface ClaudeClientAppOptions {
@@ -323,7 +328,36 @@ export class ClaudeClientApp {
         const recentDirs = this.directoryStore.getRecentDirectories(5);
         await this.feishuClient.sendCardMessage(
           ctx.chatId,
-          generateHelpCard(currentDir, recentDirs),
+          generateHelpCard(currentDir, recentDirs, !!this.config.workspaceDir),
+          { replyToMessageId: ctx.messageId }
+        );
+        break;
+      }
+
+      case 'dirs': {
+        if (!this.config.workspaceDir) {
+          await this.feishuClient.sendTextMessage(
+            ctx.chatId,
+            '⚠️ 未配置工作目录，请在 `.env` 中设置 `WORKSPACE_DIR`',
+            { replyToMessageId: ctx.messageId }
+          );
+          break;
+        }
+
+        const dirs = getSubDirectories(this.config.workspaceDir);
+        if (dirs.length === 0) {
+          await this.feishuClient.sendTextMessage(
+            ctx.chatId,
+            '📂 工作目录下没有子文件夹',
+            { replyToMessageId: ctx.messageId }
+          );
+          break;
+        }
+
+        const currentDir = this.getWorkingDirectory(ctx.chatId);
+        await this.feishuClient.sendCardMessage(
+          ctx.chatId,
+          generateDirectoryListCard(dirs, currentDir),
           { replyToMessageId: ctx.messageId }
         );
         break;
@@ -482,6 +516,45 @@ export class ClaudeClientApp {
           await this.feishuClient.sendTextMessage(
             ctx.chatId,
             `❌ 未找到任务: \`${targetDir}\``,
+            { replyToMessageId: ctx.messageId }
+          );
+        }
+        break;
+      }
+
+      case 'skills': {
+        const currentDir = this.getWorkingDirectory(ctx.chatId);
+        const skills = loadAllSkills(currentDir);
+        await this.feishuClient.sendCardMessage(
+          ctx.chatId,
+          generateSkillListCard(skills),
+          { replyToMessageId: ctx.messageId }
+        );
+        break;
+      }
+
+      case 'skill-copy': {
+        const currentDir = this.getWorkingDirectory(ctx.chatId);
+        const skills = loadAllSkills(currentDir);
+        const skillId = command.args.trim();
+        const skill = findSkillById(skills, skillId);
+
+        if (skill) {
+          // 第一条：纯命令文本，方便长按复制
+          await this.feishuClient.sendTextMessage(
+            ctx.chatId,
+            skill.command,
+            { replyToMessageId: ctx.messageId }
+          );
+          // 第二条：说明信息
+          await this.feishuClient.sendTextMessage(
+            ctx.chatId,
+            `💡 **${skill.name}**: ${skill.description}\n\n长按上方命令复制，粘贴到输入框后附上你的任务描述即可使用。`,
+          );
+        } else {
+          await this.feishuClient.sendTextMessage(
+            ctx.chatId,
+            `❌ 未找到 Skill: \`${skillId}\`\n\n输入 /skills 查看所有可用 Skill`,
             { replyToMessageId: ctx.messageId }
           );
         }

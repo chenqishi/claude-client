@@ -204,6 +204,7 @@ export interface AppConfig {
   logging: {
     level: 'debug' | 'info' | 'warn' | 'error';
   };
+  workspaceDir?: string;
 }
 
 // ============ 权限请求类型 ============

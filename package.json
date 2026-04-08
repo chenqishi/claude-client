@@ -15,7 +15,10 @@
     "watch": "tsc --watch",
     "clean": "rm -rf dist",
     "test": "vitest",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "hook:install": "bash scripts/install-hook.sh install",
+    "hook:uninstall": "bash scripts/install-hook.sh uninstall",
+    "hook:status": "bash scripts/install-hook.sh status"
   },
   "keywords": [
     "claude",

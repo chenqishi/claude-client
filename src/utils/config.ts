@@ -92,6 +92,7 @@ export function loadConfig(): AppConfig {
     logging: {
       level: parseLogLevel(getEnvString('LOG_LEVEL', 'info')),
     },
+    workspaceDir: process.env.WORKSPACE_DIR ? resolve(process.env.WORKSPACE_DIR) : undefined,
   };
 }
 
