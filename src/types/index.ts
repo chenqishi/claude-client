@@ -187,6 +187,9 @@ export interface ToolCallInfo {
 
 export interface AppConfig {
   feishu: FeishuConfig;
+  allowedUserIds: string[];
+  allowedChatIds: string[];
+  allowedTenantKey?: string;
   claude: {
     apiKey?: string;
     defaultModel?: string;

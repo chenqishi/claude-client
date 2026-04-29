@@ -63,6 +63,11 @@ function parseLogLevel(value: string): 'debug' | 'info' | 'warn' | 'error' {
   throw new Error(`Invalid log level: ${value}. Must be one of: ${validLevels.join(', ')}`);
 }
 
+function parseIdList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
 export function loadConfig(): AppConfig {
   return {
     feishu: {
@@ -72,6 +77,9 @@ export function loadConfig(): AppConfig {
       verificationToken: process.env.FEISHU_VERIFICATION_TOKEN,
       domain: parseFeishuDomain(getEnvString('FEISHU_DOMAIN', 'feishu')),
     },
+    allowedUserIds: parseIdList(process.env.FEISHU_ALLOWED_USER_IDS),
+    allowedChatIds: parseIdList(process.env.FEISHU_ALLOWED_CHAT_IDS),
+    allowedTenantKey: process.env.FEISHU_TENANT_KEY,
     claude: {
       apiKey: process.env.ANTHROPIC_API_KEY,
       defaultModel: process.env.CLAUDE_DEFAULT_MODEL,

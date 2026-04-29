@@ -441,7 +441,7 @@ export class FeishuClient {
   private checkBotMentioned(event: FeishuMessageEvent): boolean {
     const mentions = event.message.mentions ?? [];
     if (mentions.length === 0) return false;
-    if (!this.botOpenId) return mentions.length > 0;
+    if (!this.botOpenId) return false;
     return mentions.some(m => m.id.open_id === this.botOpenId);
   }
 
@@ -455,8 +455,10 @@ export class FeishuClient {
     if (!mentions || mentions.length === 0) return text;
     let result = text;
     for (const mention of mentions) {
-      result = result.replace(new RegExp(`@${mention.name}\\s*`, 'g'), '').trim();
-      result = result.replace(new RegExp(mention.key, 'g'), '').trim();
+      const escapedName = mention.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedKey = mention.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      result = result.replace(new RegExp(`@${escapedName}\\s*`, 'g'), '').trim();
+      result = result.replace(new RegExp(escapedKey, 'g'), '').trim();
     }
     return result;
   }

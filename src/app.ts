@@ -63,6 +63,9 @@ export class ClaudeClientApp {
     // 初始化飞书事件处理器
     this.feishuHandler = new FeishuEventHandler(this.config.feishu, {
       onMessage: (ctx) => this.handleMessage(ctx),
+      allowedUserIds: this.config.allowedUserIds,
+      allowedChatIds: this.config.allowedChatIds,
+      allowedTenantKey: this.config.allowedTenantKey,
     });
 
     this.feishuClient = this.feishuHandler.getFeishuClient();
@@ -369,6 +372,19 @@ export class ClaudeClientApp {
 
         // 解析相对路径为绝对路径
         let newDir = path.resolve(currentDir, inputDir);
+
+        // 若配置了 WORKSPACE_DIR，限制目录切换只能在工作区内
+        if (this.config.workspaceDir) {
+          const workspace = path.resolve(this.config.workspaceDir);
+          if (newDir !== workspace && !newDir.startsWith(workspace + path.sep)) {
+            await this.feishuClient.sendTextMessage(
+              ctx.chatId,
+              `❌ 目录超出工作区范围: \`${newDir}\`\n工作区: \`${workspace}\``,
+              { replyToMessageId: ctx.messageId }
+            );
+            break;
+          }
+        }
 
         // 检查目录是否存在
         if (!fs.existsSync(newDir)) {

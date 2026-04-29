@@ -15,6 +15,9 @@ export interface FeishuEventHandlerOptions {
   onMessage?: MessageHandler;
   onBotAdded?: (chatId: string, operatorId: string) => Promise<void>;
   onBotRemoved?: (chatId: string, operatorId: string) => Promise<void>;
+  allowedUserIds?: string[];
+  allowedChatIds?: string[];
+  allowedTenantKey?: string;
 }
 
 export class FeishuEventHandler {
@@ -165,6 +168,33 @@ export class FeishuEventHandler {
   }
 
   /**
+   * 校验消息发送者是否在白名单内
+   */
+  private isAuthorized(senderOpenId: string, chatId: string, tenantKey?: string): boolean {
+    const { allowedUserIds, allowedChatIds, allowedTenantKey } = this.options;
+
+    if (allowedTenantKey && tenantKey && tenantKey !== allowedTenantKey) {
+      logger.warn('Blocked message from unauthorized tenant', { tenantKey });
+      return false;
+    }
+
+    const hasUserWhitelist = allowedUserIds && allowedUserIds.length > 0;
+    const hasChatWhitelist = allowedChatIds && allowedChatIds.length > 0;
+
+    if (!hasUserWhitelist && !hasChatWhitelist) {
+      // 未配置白名单时记录警告，但允许通过（保持向后兼容）
+      logger.warn('No FEISHU_ALLOWED_USER_IDS or FEISHU_ALLOWED_CHAT_IDS configured — accepting all senders');
+      return true;
+    }
+
+    if (hasUserWhitelist && allowedUserIds!.includes(senderOpenId)) return true;
+    if (hasChatWhitelist && allowedChatIds!.includes(chatId)) return true;
+
+    logger.warn('Blocked unauthorized sender', { senderOpenId, chatId });
+    return false;
+  }
+
+  /**
    * 处理接收到的消息
    */
   private async handleMessageReceived(event: FeishuMessageEvent): Promise<void> {
@@ -178,6 +208,12 @@ export class FeishuEventHandler {
       serviceStartTime: this.serviceStartTime,
       currentTime: Date.now(),
     });
+
+    // 授权校验
+    const tenantKey = event.sender.tenant_key;
+    if (!this.isAuthorized(ctx.senderOpenId, ctx.chatId, tenantKey)) {
+      return;
+    }
 
     // 消息去重：检查是否已处理过
     if (this.processedMessageIds.has(ctx.messageId)) {
@@ -252,6 +288,17 @@ export class FeishuEventHandler {
       return;
     }
 
+    // 忽略机器人自己的点击
+    if (event.operator.open_id === this.botOpenId) {
+      logger.debug('Ignoring card action from bot itself');
+      return;
+    }
+
+    // 授权校验
+    if (!this.isAuthorized(event.operator.open_id, chatId as string)) {
+      return;
+    }
+
     logger.info('Card action received', {
       chatId,
       messageId: event.open_message_id,
@@ -259,11 +306,9 @@ export class FeishuEventHandler {
       command,
     });
 
-    // 忽略机器人自己的点击
-    if (event.operator.open_id === this.botOpenId) {
-      logger.debug('Ignoring card action from bot itself');
-      return;
-    }
+    // 从 event 上下文中获取真实 chatType，避免绕过群聊 @ 校验
+    const rawChatType = (context?.chat_type as string | undefined) ?? (eventAny.chat_type as string | undefined);
+    const chatType: 'p2p' | 'group' = rawChatType === 'group' ? 'group' : 'p2p';
 
     // 构造消息上下文，将按钮点击转换为等效的文本消息
     const ctx: FeishuMessageContext = {
@@ -271,7 +316,7 @@ export class FeishuEventHandler {
       messageId: event.open_message_id,
       senderId: event.operator.open_id,
       senderOpenId: event.operator.open_id,
-      chatType: 'p2p', // 卡片点击通常是私聊，默认设置为 p2p
+      chatType,
       mentionedBot: true, // 卡片点击视为明确意图
       content: command,
       contentType: 'text',
